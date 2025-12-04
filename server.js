@@ -62,6 +62,24 @@ app.post("/passengers", async (req, res) => {
     res.status(500).json({ error: "Could not save to database" });
   }
 });
+// ... existing POST route ...
+
+// 3. DELETE /passengers/:id (Remove from DB)
+app.delete("/passengers/:id", async (req, res) => {
+  const { id } = req.params; // Get the ID from the URL
+  console.log("Deleting passenger ID:", id);
+
+  try {
+    // SQL Query to delete
+    await pool.query("DELETE FROM passengers WHERE id = $1", [id]);
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Could not delete" });
+  }
+});
+
+// ... app.listen ...
 
 // 3. Start Server
 app.listen(PORT, () => {
