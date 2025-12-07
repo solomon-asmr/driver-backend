@@ -2,9 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
 require("dotenv").config();
+const path = require("path"); // <--- 1. NEW: Required to locate the HTML file
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000; // Updated to use Render's port if available
 
 // Connect to Supabase
 const pool = new Pool({
@@ -17,8 +18,7 @@ app.use(express.json());
 
 // --- ROUTES ---
 
-// 1. GET /passengers (Now filters by User ID)
-// The phone will send ?userId=123 at the end of the URL
+// 1. GET /passengers (Filters by User ID)
 app.get("/passengers", async (req, res) => {
   const { userId } = req.query;
 
@@ -28,7 +28,6 @@ app.get("/passengers", async (req, res) => {
 
   try {
     console.log(`Fetching passengers for User: ${userId}`);
-    // SQL: Only select rows where user_id matches the requester
     const result = await pool.query(
       "SELECT * FROM passengers WHERE user_id = $1 ORDER BY id DESC",
       [userId]
@@ -42,8 +41,8 @@ app.get("/passengers", async (req, res) => {
 
 // 2. POST /passengers (Save to DB with Google & User ID)
 app.post("/passengers", async (req, res) => {
-  const { name, address, userId } = req.body; // <--- We expect userId now
-  const apiKey = process.env.GOOGLE_MAPS_KEY; // Make sure this is in your backend .env file!
+  const { name, address, userId } = req.body;
+  const apiKey = process.env.GOOGLE_MAPS_KEY;
 
   if (!name || !address || !userId) {
     return res
@@ -58,7 +57,6 @@ app.post("/passengers", async (req, res) => {
   let type = "New Pickup";
 
   try {
-    // A. Ask Google Maps: "Where is this address?"
     const geocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
       address
     )}&key=${apiKey}`;
@@ -66,7 +64,6 @@ app.post("/passengers", async (req, res) => {
     const geoResponse = await fetch(geocodeUrl);
     const geoData = await geoResponse.json();
 
-    // B. Check if Google found it
     if (geoData.status === "OK" && geoData.results.length > 0) {
       const location = geoData.results[0].geometry.location;
       lat = location.lat;
@@ -74,13 +71,11 @@ app.post("/passengers", async (req, res) => {
       console.log(`Found location: ${lat}, ${lng}`);
     } else {
       console.log("Google could not find address:", geoData.status);
-      // Fallback: Default to Tel Aviv center
       lat = 32.0853;
       lng = 34.7818;
       type = "Address Not Found";
     }
 
-    // C. Save to Database (Including the user_id)
     const result = await pool.query(
       "INSERT INTO passengers (name, address, lat, lng, type, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
       [name, address, lat, lng, type, userId]
@@ -104,7 +99,6 @@ app.delete("/passengers/:id", async (req, res) => {
     res.status(500).json({ error: "Could not delete" });
   }
 });
-// ... existing routes ...
 
 // 5. POST /share (Driver A creates a transfer code)
 app.post("/share", async (req, res) => {
@@ -114,7 +108,6 @@ app.post("/share", async (req, res) => {
     return res.status(400).json({ error: "No passengers selected" });
   }
 
-  // Generate a simple 4-char code (e.g., "TR-4921")
   const code = "TR-" + Math.floor(1000 + Math.random() * 9000);
 
   try {
@@ -128,12 +121,12 @@ app.post("/share", async (req, res) => {
     res.status(500).json({ error: "Could not create share code" });
   }
 });
+
 // 6. POST /import (Driver B claims the passengers - COPY MODE)
 app.post("/import", async (req, res) => {
   const { code, userId } = req.body;
 
   try {
-    // A. Find the transfer info
     const transferResult = await pool.query(
       "SELECT * FROM transfers WHERE code = $1",
       [code]
@@ -145,9 +138,6 @@ app.post("/import", async (req, res) => {
 
     const { passenger_ids, destination } = transferResult.rows[0];
 
-    // B. COPY passengers to the NEW User (Instead of moving them)
-    // We select the details from the original passengers, but insert them
-    // as NEW rows with the NEW user_id ($2).
     const copyQuery = `
       INSERT INTO passengers (name, address, lat, lng, type, user_id)
       SELECT name, address, lat, lng, type, $2
@@ -158,13 +148,10 @@ app.post("/import", async (req, res) => {
 
     const copyResult = await pool.query(copyQuery, [passenger_ids, userId]);
 
-    // Get the IDs of the NEWLY created rows (so we can highlight them green)
     const newPassengerIds = copyResult.rows.map((row) => row.id);
 
-    // C. Delete the used share code (Safety cleanup)
     await pool.query("DELETE FROM transfers WHERE code = $1", [code]);
 
-    // Return the new IDs and destination
     res.json({
       success: true,
       destination: destination,
@@ -174,7 +161,16 @@ app.post("/import", async (req, res) => {
     console.error(err);
     res.status(500).json({ error: "Import failed" });
   }
-}); // 4. Start Server
+});
+
+// --- NEW: ROOT ROUTE FOR EMAIL CONFIRMATION ---
+// 7. GET / (Serves the Success Page)
+app.get("/", (req, res) => {
+  // This tells the server to look for 'success.html' in the same folder and send it
+  res.sendFile(path.join(__dirname, "success.html"));
+});
+
+// 4. Start Server
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
